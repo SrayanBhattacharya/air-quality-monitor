@@ -76,8 +76,10 @@ def run_inference(model, scaler, device):
     df_raw["datetime"] = pd.to_datetime(df_raw["datetime"])
     last_row = df_raw.sort_values("datetime").iloc[-1]
     last_dt  = pd.to_datetime(last_row["datetime"]).tz_localize(None)
+    IST_OFFSET = timedelta(hours=5, minutes=30)
+
     timestamps = [
-        (last_dt + timedelta(minutes=15 * (i + 1))).strftime("%H:%M")
+        (last_dt + timedelta(minutes=15 * (i + 1)) + IST_OFFSET).strftime("%H:%M")
         for i in range(OUTPUT_WINDOW)
     ]
 
