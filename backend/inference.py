@@ -81,4 +81,11 @@ def run_inference(model, scaler, device):
         for i in range(OUTPUT_WINDOW)
     ]
 
+    ref = db.reference("predictions")
+    ref.push({
+    "datetime": (last_dt + timedelta(minutes=15)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "pm25": round(float(preds_inv[0, 0]), 2),
+    "pm10": round(float(preds_inv[0, 1]), 2),
+    })
+
     return preds_inv, last_row, timestamps

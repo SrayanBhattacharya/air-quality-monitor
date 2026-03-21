@@ -172,15 +172,41 @@ def get_peak():
 
 @app.get("/history")
 def get_history():
-    """Last 48 readings (12 hours) of true sensor values from Firebase."""
-    df = fetch_latest_records(INPUT_WINDOW)
-    if df.empty:
-        return {"timestamps": [], "pm25": [], "pm10": []}
+    """Last 48 actual readings + matching predictions from Firebase."""
+    # Fetch actual readings
+    df_actual = fetch_latest_records(INPUT_WINDOW)
+    if df_actual.empty:
+        return {"timestamps": [], "pm25": [], "pm10": [], "pm25pred": [], "pm10pred": []}
+
+    # Fetch predictions
+    ref = db.reference("predictions")
+    pred_data = ref.order_by_child("datetime").limit_to_last(INPUT_WINDOW).get()
+
+    # Build predictions lookup dict {datetime_str: {pm25, pm10}}
+    pred_lookup = {}
+    if pred_data:
+        for v in pred_data.values():
+            # Normalize to match actual datetime format (strip seconds)
+            dt = pd.to_datetime(v["datetime"]).strftime("%Y-%m-%dT%H:%M")
+            pred_lookup[dt] = {"pm25": v["pm25"], "pm10": v["pm10"]}
+
+    # Match predictions to actual readings by datetime
+    pm25pred, pm10pred = [], []
+    for dt in df_actual["datetime"]:
+        key = pd.to_datetime(dt).strftime("%Y-%m-%dT%H:%M")
+        if key in pred_lookup:
+            pm25pred.append(pred_lookup[key]["pm25"])
+            pm10pred.append(pred_lookup[key]["pm10"])
+        else:
+            pm25pred.append(None)  # no prediction for this timestamp yet
+            pm10pred.append(None)
 
     return {
-        "timestamps": df["datetime"].dt.strftime("%H:%M").tolist(),
-        "pm25":       [round(float(v), 2) for v in df["pm25"]],
-        "pm10":       [round(float(v), 2) for v in df["pm10"]],
+        "timestamps": df_actual["datetime"].dt.strftime("%H:%M").tolist(),
+        "pm25":       [round(float(v), 2) for v in df_actual["pm25"]],
+        "pm10":       [round(float(v), 2) for v in df_actual["pm10"]],
+        "pm25pred":   pm25pred,
+        "pm10pred":   pm10pred,
     }
 
 
