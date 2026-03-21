@@ -5,24 +5,40 @@ import pandas as pd
 import torch
 from datetime import timedelta
 from fastapi import HTTPException
+from firebase_admin import db
 
 from config import (
-    CSV_PATH, INPUT_WINDOW, OUTPUT_WINDOW,
-    ROLL_WINDOW, NUMERIC_COLS
+    INPUT_WINDOW, OUTPUT_WINDOW,
+    ROLL_WINDOW, NUMERIC_COLS,
+    FIREBASE_NODE, FIREBASE_FETCH_LIMIT
 )
 from preprocessing import preprocess, inverse_pm
 
 
+def fetch_from_firebase() -> pd.DataFrame:
+    """Fetch latest records from Firebase Realtime Database."""
+    ref  = db.reference(FIREBASE_NODE)
+    data = ref.order_by_key().limit_to_last(FIREBASE_FETCH_LIMIT).get()
+
+    if not data:
+        raise HTTPException(status_code=503, detail="No data available in Firebase.")
+
+    # Convert dict of records to DataFrame
+    records = list(data.values())
+    df = pd.DataFrame(records)
+    return df
+
+
 def run_inference(model, scaler, device):
     """
-    Read CSV, preprocess, run model, return inverse-transformed predictions.
+    Fetch from Firebase, preprocess, run model, return inverse-transformed predictions.
 
     Returns:
         preds_inv  : np.ndarray shape (24, 2)  — absolute µg/m³ forecasts
         last_row   : pd.Series                 — latest raw sensor row
         timestamps : list[str]                 — forecast timestamps (HH:MM)
     """
-    df_raw = pd.read_csv(CSV_PATH)
+    df_raw = fetch_from_firebase()
 
     # Validate enough rows exist
     required = ROLL_WINDOW + INPUT_WINDOW
@@ -56,6 +72,8 @@ def run_inference(model, scaler, device):
     preds_inv = np.stack([pm25_inv, pm10_inv], axis=1)            # (24, 2)
 
     # Generate forecast timestamps (15-min steps from last reading)
+    df_raw = df_raw.copy()
+    df_raw["datetime"] = pd.to_datetime(df_raw["datetime"])
     last_row = df_raw.sort_values("datetime").iloc[-1]
     last_dt  = pd.to_datetime(last_row["datetime"]).tz_localize(None)
     timestamps = [

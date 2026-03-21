@@ -21,3 +21,11 @@ SCALER_PATH = "models/scaler.pkl"
 # WHO thresholds (µg/m³)
 PM25_THRESHOLD = 15.0
 PM10_THRESHOLD = 45.0
+
+# ── Firebase ──────────────────────────────────────────────────────────────────
+FIREBASE_CRED_PATH = "real-time-weather-b3d71-firebase-adminsdk-fbsvc-89ef89a785.json"
+FIREBASE_DB_URL    = "https://real-time-weather-b3d71-default-rtdb.firebaseio.com/"
+FIREBASE_NODE      = "env_data_new"
+ 
+# Fetch a few extra rows beyond minimum (ROLL_WINDOW + INPUT_WINDOW = 72)
+FIREBASE_FETCH_LIMIT = 80

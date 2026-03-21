@@ -4,14 +4,17 @@ import torch
 import joblib
 import numpy as np
 import pandas as pd
+import firebase_admin
+from firebase_admin import credentials, db
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import (
-    CSV_PATH, MODEL_PATH, SCALER_PATH,
+    MODEL_PATH, SCALER_PATH,
     INPUT_SIZE, HIDDEN_SIZE, OUTPUT_WINDOW, NUM_TARGETS, INPUT_WINDOW,
-    PM25_THRESHOLD, PM10_THRESHOLD
+    PM25_THRESHOLD, PM10_THRESHOLD,
+    FIREBASE_CRED_PATH, FIREBASE_DB_URL, FIREBASE_NODE, FIREBASE_FETCH_LIMIT
 )
 from model import LiquidPMModel
 from inference import run_inference
@@ -37,14 +40,34 @@ def get_aqi_category(pm25_value: float) -> str:
         return "Very Unhealthy"
 
 
+def fetch_latest_records(n: int) -> pd.DataFrame:
+    """Fetch latest n records from Firebase."""
+    ref  = db.reference(FIREBASE_NODE)
+    data = ref.order_by_key().limit_to_last(n).get()
+    if not data:
+        return pd.DataFrame()
+    df = pd.DataFrame(list(data.values()))
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.sort_values("datetime").reset_index(drop=True)
+    return df
+
+
 # ── App Lifespan ──────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global model, scaler
 
+    # Init Firebase
+    print("Initializing Firebase...")
+    cred = credentials.Certificate(FIREBASE_CRED_PATH)
+    firebase_admin.initialize_app(cred, {"databaseURL": FIREBASE_DB_URL})
+    print("Firebase connected!")
+
+    # Load scaler
     print("Loading scaler...")
     scaler = joblib.load(SCALER_PATH)
 
+    # Load model
     print("Loading model...")
     model = LiquidPMModel(
         input_size=INPUT_SIZE,
@@ -52,8 +75,6 @@ async def lifespan(app: FastAPI):
         output_steps=OUTPUT_WINDOW,
         num_targets=NUM_TARGETS
     ).to(device)
-
-    # Strip _orig_mod. prefix added by torch.compile() during training
     state_dict = torch.load(MODEL_PATH, map_location=device)
     state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
     model.load_state_dict(state_dict)
@@ -70,7 +91,7 @@ app = FastAPI(title="Air Quality Dashboard API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this in production
+    allow_origins=["*"],  # tighten in production
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -85,12 +106,14 @@ def health():
 
 @app.get("/current")
 def get_current():
-    """Latest sensor reading from CSV."""
-    df      = pd.read_csv(CSV_PATH)
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    last    = df.sort_values("datetime").iloc[-1]
+    """Latest sensor reading from Firebase."""
+    df   = fetch_latest_records(1)
+    if df.empty:
+        return {"error": "No data available"}
 
-    # Sensor freshness check (offline if > 20 min since last reading)
+    last = df.iloc[-1]
+
+    # Sensor freshness check
     last_dt       = pd.to_datetime(last["datetime"]).tz_localize(None)
     now           = pd.Timestamp.utcnow().tz_localize(None)
     minutes_since = (now - last_dt).total_seconds() / 60
@@ -125,11 +148,11 @@ def get_peak():
     preds_inv, _, timestamps = run_inference(model, scaler, device)
 
     def peak_info(values, timestamps, threshold):
-        peak_idx  = int(np.argmax(values))
-        peak_val  = float(values[peak_idx])
-        minutes   = (peak_idx + 1) * 15
-        hours     = minutes // 60
-        mins_rem  = minutes % 60
+        peak_idx   = int(np.argmax(values))
+        peak_val   = float(values[peak_idx])
+        minutes    = (peak_idx + 1) * 15
+        hours      = minutes // 60
+        mins_rem   = minutes % 60
         time_label = f"{hours}h {mins_rem}min" if hours > 0 else f"{mins_rem}min"
 
         return {
@@ -149,10 +172,10 @@ def get_peak():
 
 @app.get("/history")
 def get_history():
-    """Last 48 readings (12 hours) of true sensor values."""
-    df = pd.read_csv(CSV_PATH)
-    df["datetime"] = pd.to_datetime(df["datetime"])
-    df = df.sort_values("datetime").tail(INPUT_WINDOW)
+    """Last 48 readings (12 hours) of true sensor values from Firebase."""
+    df = fetch_latest_records(INPUT_WINDOW)
+    if df.empty:
+        return {"timestamps": [], "pm25": [], "pm10": []}
 
     return {
         "timestamps": df["datetime"].dt.strftime("%H:%M").tolist(),
@@ -170,4 +193,12 @@ def get_metrics():
     return {
         "pm25": {"mae": 3.21, "rmse": 4.85, "r2": 0.91},
         "pm10": {"mae": 5.10, "rmse": 6.72, "r2": 0.88},
+    }
+
+
+@app.get("/config")
+def get_config():
+    """Frontend configuration."""
+    return {
+        "location": "Kolkata Monitoring Station"
     }
