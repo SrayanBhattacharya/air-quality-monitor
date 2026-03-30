@@ -16,6 +16,7 @@ build/
 # (not recommended — use cloud storage for large .pth files)
 backend/models/*.pth
 backend/models/*.pkl
+backend/real-time-weather-b3d71-firebase-adminsdk-fbsvc-89ef89a785.json
 
 # ── Data Files ─────────────────────────────────
 *.csv
